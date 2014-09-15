@@ -1,0 +1,18 @@
+# host where the server will run
+# add the port also
+host: myhost:9292
+
+# ssh private key file
+keyfile: /folder/mykey
+
+# name of remote host
+host: myremotehost.org
+
+# remote user name
+user: myuser
+
+# remote folder where the changed files will be copied
+remote: /remote
+
+# local folder where the git repository will be cloned
+workdir: /home/myworkdir
