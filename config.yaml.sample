@@ -6,13 +6,13 @@ host: myhost:9292
 keyfile: /folder/mykey
 
 # name of remote host
-host: myremotehost.org
+remote: myremotehost.org
 
 # remote user name
 user: myuser
 
 # remote folder where the changed files will be copied
-remote: /remote
+folder: /remote
 
 # local folder where the git repository will be cloned
 workdir: /home/myworkdir
