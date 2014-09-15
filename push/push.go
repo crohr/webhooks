@@ -22,7 +22,7 @@ import (
 type Config struct {
 	ServiceHost string `yaml:"host,flow"`
 	KeyFile     string
-	Remote      string
+	Remotes     []string
 	User        string
 	Folder      string
 	Workdir     string
@@ -202,9 +202,9 @@ func readConfig(c *cli.Context) (Config, error) {
 
 func getHttpHandler(conf Config) (http.Handler, error) {
 	// sftp client setup
-	client := getSftpClient(conf)
+	clients := getSftpClient(conf)
 	// setup routes
-	resource := &webHookResource{conf, client}
+	resource := &webHookResource{conf, clients}
 	r := gin.Default()
 	auth := r.Group("/webhook")
 	auth.POST("/email", resource.sendEmail)
@@ -212,7 +212,7 @@ func getHttpHandler(conf Config) (http.Handler, error) {
 	return r, nil
 }
 
-func getSftpClient(conf Config) *sftp.Client {
+func getSftpClient(conf Config) []*sftp.Client {
 	// process the keyfile
 	buf, err := ioutil.ReadFile(conf.KeyFile)
 	if err != nil {
@@ -228,25 +228,31 @@ func getSftpClient(conf Config) *sftp.Client {
 		Auth: []ssh.AuthMethod{ssh.PublicKeys(key)},
 	}
 	// connection
-	client, err := ssh.Dial("tcp", conf.Remote+":22", config)
-	if err != nil {
-		log.Fatalf("error in ssh connection %s\n", err)
+	clients := make([]*sftp.Client, 0)
+	for _, r := range conf.Remotes {
+		c, err := ssh.Dial("tcp", r+":22", config)
+		if err != nil {
+			log.Fatalf("error in ssh connection %s\n", err)
+		}
+		// sftp handler
+		sftp, err := sftp.NewClient(c)
+		if err != nil {
+			log.Fatalf("error in sftp connection %s\n", err)
+		}
+		clients = append(clients, sftp)
 	}
-	// sftp handler
-	sftp, err := sftp.NewClient(client)
-	if err != nil {
-		log.Fatalf("error in sftp connection %s\n", err)
-	}
-	return sftp
+	return clients
 }
 
 type webHookResource struct {
-	config Config
-	client *sftp.Client
+	config  Config
+	clients []*sftp.Client
 }
 
 func (w *webHookResource) copyRemote(c *gin.Context) {
-	defer w.client.Close()
+	for _, c := range w.clients {
+		defer c.Close()
+	}
 	var wh webHookPush
 	if !c.Bind(&wh) {
 		log.Println("could not parse json request")
@@ -312,24 +318,26 @@ func (w *webHookResource) copyRemote(c *gin.Context) {
 		}
 		log.Printf("copied file %s to all remotes in folder %s", filepath.Join(cdir, m), w.config.Folder)
 	}
-	c.String(200, "copied all files to remote %s", w.config.Remote)
+	c.String(200, "copied all files to remote")
 	return
 }
 
 func (w *webHookResource) secureCopy(file string, dir string) error {
 	conf := w.config
 	rfile := filepath.Join(conf.Folder, filepath.Base(file))
-	wr, err := w.client.Create(rfile)
-	if err != nil {
-		return fmt.Errorf("error in creating remote file %s\n", err)
-	}
-	rd, err := os.Open(filepath.Join(dir, file))
-	if err != nil {
-		return err
-	}
-	defer rd.Close()
-	if _, err := io.Copy(wr, rd); err != nil {
-		return fmt.Errorf("error in copying file to remote system %s\n", err)
+	for _, cl := range w.clients {
+		wr, err := cl.Create(rfile)
+		if err != nil {
+			return fmt.Errorf("error in creating remote file %s\n", err)
+		}
+		rd, err := os.Open(filepath.Join(dir, file))
+		if err != nil {
+			return err
+		}
+		defer rd.Close()
+		if _, err := io.Copy(wr, rd); err != nil {
+			return fmt.Errorf("error in copying file to remote system %s\n", err)
+		}
 	}
 	return nil
 }

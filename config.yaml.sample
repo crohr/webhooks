@@ -6,7 +6,9 @@ host: myhost:9292
 keyfile: /folder/mykey
 
 # name of remote host
-remote: myremotehost.org
+remotes: 
+    - myremotehost.org
+    - myremote2host.com
 
 # remote user name
 user: myuser
