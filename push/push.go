@@ -292,7 +292,7 @@ func (g *gitCmd) Pull() error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("git", "clone", "origin")
+	cmd := exec.Command("git", "pull", "origin")
 	var eout bytes.Buffer
 	cmd.Stderr = &eout
 	err = cmd.Run()
