@@ -201,8 +201,8 @@ func getHttpHandler(conf Config) (http.Handler, error) {
 	resource := &webHookResource{conf}
 	r := gin.Default()
 	auth := r.Group("/webhook")
-	auth.POST("/issues", resource.CreateIssue)
-	auth.POST("/push", resource.CopyRemote)
+	auth.POST("/email", resource.sendEmail)
+	auth.POST("/copy", resource.copyRemote)
 	return r, nil
 }
 
@@ -210,7 +210,7 @@ type webHookResource struct {
 	config Config
 }
 
-func (w *webHookResource) CopyRemote(c *gin.Context) {
+func (w *webHookResource) copyRemote(c *gin.Context) {
 	var wh webHookPush
 	if !c.Bind(&wh) {
 		log.Println("could not parse json request")
@@ -264,7 +264,7 @@ func reportChangedFiles(files []string, cdir string, event string, c *gin.Contex
 	}
 }
 
-func (w *webHookResource) CreateIssue(c *gin.Context) {
+func (w *webHookResource) sendEmail(c *gin.Context) {
 }
 
 type gitCmd struct {
