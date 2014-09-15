@@ -219,8 +219,9 @@ func (w *webHookResource) copyRemote(c *gin.Context) {
 	}
 	cdir := filepath.Join(w.config.Workdir, filepath.Base(wh.Repository.CloneUrl))
 	g := &gitCmd{
-		repository: wh.Repository.CloneUrl,
-		dir:        cdir,
+		repository:    wh.Repository.CloneUrl,
+		dir:           cdir,
+		defaultBranch: wh.Repository.DefaultBranch,
 	}
 	info, err := os.Stat(cdir)
 	if err != nil {
@@ -277,8 +278,9 @@ func (w *webHookResource) sendEmail(c *gin.Context) {
 }
 
 type gitCmd struct {
-	repository string
-	dir        string
+	repository    string
+	dir           string
+	defaultBranch string
 }
 
 func (g *gitCmd) Checkout(b string) error {
@@ -301,12 +303,7 @@ func (g *gitCmd) Pull() error {
 	if err != nil {
 		return err
 	}
-	// get the current branch first
-	cb, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
-	if err != nil {
-		return err
-	}
-	cmd := exec.Command("git", "pull", "origin", string(cb))
+	cmd := exec.Command("git", "pull", "origin", g.defaultBranch)
 	var eout bytes.Buffer
 	cmd.Stderr = &eout
 	err = cmd.Run()
