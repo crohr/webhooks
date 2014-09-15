@@ -3,12 +3,16 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"code.google.com/p/go.crypto/ssh"
+	"github.com/pkg/sftp"
 
 	"gopkg.in/codegangsta/cli.v0"
 	"gopkg.in/gin-gonic/gin.v0"
@@ -197,8 +201,10 @@ func readConfig(c *cli.Context) (Config, error) {
 }
 
 func getHttpHandler(conf Config) (http.Handler, error) {
+	// sftp client setup
+	client := getSftpClient(conf)
 	// setup routes
-	resource := &webHookResource{conf}
+	resource := &webHookResource{conf, client}
 	r := gin.Default()
 	auth := r.Group("/webhook")
 	auth.POST("/email", resource.sendEmail)
@@ -206,11 +212,41 @@ func getHttpHandler(conf Config) (http.Handler, error) {
 	return r, nil
 }
 
+func getSftpClient(conf Config) *sftp.Client {
+	// process the keyfile
+	buf, err := ioutil.ReadFile(conf.KeyFile)
+	if err != nil {
+		log.Fatalf("error in reading private key file %s\n", err)
+	}
+	key, err := ssh.ParsePrivateKey(buf)
+	if err != nil {
+		log.Fatalf("error in parsing private key %s\n", key)
+	}
+	// client config
+	config := &ssh.ClientConfig{
+		User: conf.User,
+		Auth: []ssh.AuthMethod{ssh.PublicKeys(key)},
+	}
+	// connection
+	client, err := ssh.Dial("tcp", conf.Remote+":22", config)
+	if err != nil {
+		log.Fatalf("error in ssh connection %s\n", err)
+	}
+	// sftp handler
+	sftp, err := sftp.NewClient(client)
+	if err != nil {
+		log.Fatalf("error in sftp connection %s\n", err)
+	}
+	return sftp
+}
+
 type webHookResource struct {
 	config Config
+	client *sftp.Client
 }
 
 func (w *webHookResource) copyRemote(c *gin.Context) {
+	defer w.client.Close()
 	var wh webHookPush
 	if !c.Bind(&wh) {
 		log.Println("could not parse json request")
@@ -226,7 +262,6 @@ func (w *webHookResource) copyRemote(c *gin.Context) {
 	info, err := os.Stat(cdir)
 	if err != nil {
 		if os.IsNotExist(err) { // clone repository
-			log.Println("cloning repository")
 			if err := g.Clone(); err != nil {
 				log.Println(err)
 				c.String(400, err.Error())
@@ -243,7 +278,6 @@ func (w *webHookResource) copyRemote(c *gin.Context) {
 	// repository already cloned
 	if info.IsDir() {
 		// pull latest changes
-		log.Println("pulling repository")
 		if err := g.Pull(); err != nil {
 			log.Println(err)
 			c.String(400, err.Error())
@@ -259,19 +293,45 @@ func (w *webHookResource) copyRemote(c *gin.Context) {
 		return
 	}
 	log.Printf("checked out commit %s of repository %s\n", wh.HeadCommit.Id, wh.Repository.CloneUrl)
-	// figure out the modified file(s)
-	reportChangedFiles(wh.HeadCommit.Added, cdir, "added", c)
-	reportChangedFiles(wh.HeadCommit.Modified, cdir, "modified", c)
-	return
+
+	// figure out the added/modified file(s) and
 	// copy them to remote server
+	for _, a := range wh.HeadCommit.Added {
+		if err := w.secureCopy(a, cdir); err != nil {
+			c.String(400, err.Error())
+			log.Println(err)
+			return
+		}
+		log.Printf("copied file %s to all remotes in folder %s", filepath.Join(cdir, a), w.config.Folder)
+	}
+	for _, m := range wh.HeadCommit.Modified {
+		if err := w.secureCopy(m, cdir); err != nil {
+			c.String(400, err.Error())
+			log.Println(err)
+			return
+		}
+		log.Printf("copied file %s to all remotes in folder %s", filepath.Join(cdir, m), w.config.Folder)
+	}
+	c.String(200, "copied all files to remote %s", w.config.Remote)
+	return
 }
 
-func reportChangedFiles(files []string, cdir string, event string, c *gin.Context) {
-	for _, a := range files {
-		p := filepath.Join(cdir, a)
-		log.Printf("%s file %s\n", event, p)
-		c.String(200, "%s file %s\n", event, p)
+func (w *webHookResource) secureCopy(file string, dir string) error {
+	conf := w.config
+	rfile := filepath.Join(conf.Folder, filepath.Base(file))
+	wr, err := w.client.Create(rfile)
+	if err != nil {
+		return fmt.Errorf("error in creating remote file %s\n", err)
 	}
+	rd, err := os.Open(filepath.Join(dir, file))
+	if err != nil {
+		return err
+	}
+	defer rd.Close()
+	if _, err := io.Copy(wr, rd); err != nil {
+		return fmt.Errorf("error in copying file to remote system %s\n", err)
+	}
+	return nil
 }
 
 func (w *webHookResource) sendEmail(c *gin.Context) {
