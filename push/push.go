@@ -222,24 +222,33 @@ func (w *webHookResource) copyRemote(c *gin.Context) {
 		repository: wh.Repository.CloneUrl,
 		dir:        cdir,
 	}
-	_, err := os.Stat(cdir)
+	info, err := os.Stat(cdir)
+	if err != nil {
+		if os.IsNotExist(err) { // clone repository
+			log.Println("cloning repository")
+			if err := g.Clone(); err != nil {
+				log.Println(err)
+				c.String(400, err.Error())
+				return
+			}
+			log.Printf("cloned repository %s\n", wh.Repository.CloneUrl)
+
+		} else {
+			log.Fatal(err)
+			c.String(400, err.Error())
+			return
+		}
+	}
 	// repository already cloned
-	if os.IsExist(err) {
+	if info.IsDir() {
 		// pull latest changes
+		log.Println("pulling repository")
 		if err := g.Pull(); err != nil {
 			log.Println(err)
 			c.String(400, err.Error())
 			return
 		}
 		log.Printf("pulled repository %s\n", wh.Repository.CloneUrl)
-
-	} else {
-		if err := g.Clone(); err != nil {
-			log.Println(err)
-			c.String(400, err.Error())
-			return
-		}
-		log.Printf("cloned repository %s\n", wh.Repository.CloneUrl)
 
 	}
 	// now checkout particular commit
@@ -292,7 +301,12 @@ func (g *gitCmd) Pull() error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("git", "pull", "origin")
+	// get the current branch first
+	cb, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("git", "pull", "origin", string(cb))
 	var eout bytes.Buffer
 	cmd.Stderr = &eout
 	err = cmd.Run()
