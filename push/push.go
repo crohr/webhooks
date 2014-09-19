@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 
 	"code.google.com/p/go.crypto/ssh"
+	logger "github.com/dictybase/webhooks"
 	"github.com/pkg/sftp"
 
 	"gopkg.in/codegangsta/cli.v0"
@@ -155,6 +155,12 @@ type webHookPush struct {
 	} `json:"repository"`
 }
 
+var log *logger.Logger
+
+func init() {
+	log = logger.NewLogger(os.Stderr, logger.INFO)
+}
+
 func main() {
 	app := cli.NewApp()
 	app.Name = "webhook"
@@ -179,7 +185,7 @@ func runServer(c *cli.Context) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("starting webserver at %s\n", config.ServiceHost)
+	log.Infof("starting webserver at %s\n", config.ServiceHost)
 	http.ListenAndServe(config.ServiceHost, handler)
 }
 
@@ -250,12 +256,12 @@ type webHookResource struct {
 }
 
 func (w *webHookResource) copyRemote(c *gin.Context) {
-	for _, c := range w.clients {
-		defer c.Close()
-	}
+	//for _, c := range w.clients {
+	//defer c.Close()
+	//}
 	var wh webHookPush
 	if !c.Bind(&wh) {
-		log.Println("could not parse json request")
+		log.Error("could not parse json request")
 		c.String(400, "could not parse json request")
 		return
 	}
@@ -269,54 +275,56 @@ func (w *webHookResource) copyRemote(c *gin.Context) {
 	if err != nil {
 		if os.IsNotExist(err) { // clone repository
 			if err := g.Clone(); err != nil {
-				log.Println(err)
+				log.Error(err)
 				c.String(400, err.Error())
 				return
 			}
-			log.Printf("cloned repository %s\n", wh.Repository.CloneUrl)
+			log.Infof("cloned repository %s\n", wh.Repository.CloneUrl)
 
 		} else {
-			log.Fatal(err)
+			log.Error(err)
 			c.String(400, err.Error())
 			return
 		}
-	}
-	// repository already cloned
-	if info.IsDir() {
+	} else if info.IsDir() { // repository already cloned
 		// pull latest changes
 		if err := g.Pull(); err != nil {
-			log.Println(err)
+			log.Error(err)
 			c.String(400, err.Error())
 			return
 		}
-		log.Printf("pulled repository %s\n", wh.Repository.CloneUrl)
+		log.Infof("pulled repository %s\n", wh.Repository.CloneUrl)
 
+	} else {
+		log.Error("Unknown error, cannot pull or clone repository")
+		c.String(400, "Unknown error, cannot pull or clone repository")
+		return
 	}
 	// now checkout particular commit
 	if err := g.Checkout(wh.HeadCommit.Id); err != nil {
-		log.Println(err)
+		log.Error(err)
 		c.String(400, err.Error())
 		return
 	}
-	log.Printf("checked out commit %s of repository %s\n", wh.HeadCommit.Id, wh.Repository.CloneUrl)
+	log.Infof("checked out commit %s of repository %s\n", wh.HeadCommit.Id, wh.Repository.CloneUrl)
 
 	// figure out the added/modified file(s) and
 	// copy them to remote server
 	for _, a := range wh.HeadCommit.Added {
 		if err := w.secureCopy(a, cdir); err != nil {
 			c.String(400, err.Error())
-			log.Println(err)
+			log.Error(err)
 			return
 		}
-		log.Printf("copied file %s to all remotes in folder %s", filepath.Join(cdir, a), w.config.Folder)
+		log.Infof("copied file %s to all remotes in folder %s", filepath.Join(cdir, a), w.config.Folder)
 	}
 	for _, m := range wh.HeadCommit.Modified {
 		if err := w.secureCopy(m, cdir); err != nil {
 			c.String(400, err.Error())
-			log.Println(err)
+			log.Error(err)
 			return
 		}
-		log.Printf("copied file %s to all remotes in folder %s", filepath.Join(cdir, m), w.config.Folder)
+		log.Infof("copied file %s to all remotes in folder %s", filepath.Join(cdir, m), w.config.Folder)
 	}
 	c.String(200, "copied all files to remote")
 	return
