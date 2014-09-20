@@ -227,7 +227,7 @@ func getHttpHandler(conf Config) (http.Handler, error) {
 func validateToken(messageMAC, body, token []byte) bool {
 	mac := hmac.New(sha1.New, token)
 	mac.Write(body)
-	expected := mac.Sum(nil)
+	expected := mac.Sum([]byte("sha1="))
 	return hmac.Equal(messageMAC, expected)
 }
 
@@ -249,7 +249,7 @@ func getSftpClient(conf Config) []*sftp.Client {
 	// connection
 	clients := make([]*sftp.Client, 0)
 	for _, r := range conf.Remotes {
-		c, err := ssh.Dial("tcp", r+":22", config)
+		c, err := ssh.Dial("tcp", r, config)
 		if err != nil {
 			log.Fatalf("error in ssh connection %s\n", err)
 		}
