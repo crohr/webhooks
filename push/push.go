@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha1"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -220,15 +222,19 @@ func getHttpHandler(conf Config) (http.Handler, error) {
 	r := gin.Default()
 	auth := r.Group("/webhook")
 	auth.POST("/email", resource.sendEmail)
-	auth.POST("/copy", resource.copyRemote)
+	auth.POST("/copy", SecureWebhook(), resource.copyRemote)
 	return r, nil
 }
 
 func validateToken(messageMAC, body, token []byte) bool {
 	mac := hmac.New(sha1.New, token)
 	mac.Write(body)
-	expected := mac.Sum([]byte("sha1="))
-	return hmac.Equal(messageMAC, expected)
+	expected := "sha1=" + hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal(messageMAC, []byte(expected)) {
+		log.Errorf("got:%s\texpected:%s\n", string(messageMAC), expected)
+		return false
+	}
+	return true
 }
 
 func getSftpClient(conf Config) []*sftp.Client {
@@ -263,37 +269,44 @@ func getSftpClient(conf Config) []*sftp.Client {
 	return clients
 }
 
+func SecureWebhook() gin.HandlerFunc {
+	return func(c *gin.Context) {
+
+		// Validating the hash signature send with the webhook
+		// It should match with the given secret token
+		messageMAC := c.Request.Header.Get("X-Hub-Signature")
+		if len(messageMAC) == 0 {
+			log.Error("no digest given in the webhook")
+			c.Fail(http.StatusBadRequest, errors.New("no digest given in the webhook"))
+			return
+		}
+		body, err := ioutil.ReadAll(c.Request.Body)
+		if err != nil {
+			log.Error(err)
+			c.Fail(http.StatusBadRequest, err)
+			return
+		}
+		if !validateToken([]byte(messageMAC), body, []byte(os.Getenv("WEBHOOK_TOKEN"))) {
+			log.Error("unable to validate the hash signature")
+			c.Fail(http.StatusBadRequest, errors.New("unable to validate the hash signature"))
+			return
+		}
+		// Validation ends
+		c.Next()
+	}
+}
+
 type webHookResource struct {
 	config  Config
 	clients []*sftp.Client
 }
 
 func (w *webHookResource) copyRemote(c *gin.Context) {
-	// Validating the hash signature send with the webhook
-	// It should match with the given secret token
-	messageMAC := c.Request.Header.Get("X-Hub-Signature")
-	if len(messageMAC) == 0 {
-		log.Error("no digest given in the webhook")
-		c.String(400, "no digest given in the webhook")
-		return
-	}
-	body, err := ioutil.ReadAll(c.Request.Body)
-	if err != nil {
-		log.Error("unable to read the HTTP body")
-		c.String(400, "unable to read the HTTP body")
-		return
-	}
-	if !validateToken([]byte(messageMAC), body, []byte(os.Getenv("WEBHOOK_TOKEN"))) {
-		log.Error("unable to validate the hash signature")
-		c.String(400, "unable to validate the hash signature")
-		return
-	}
-	// Validation ends
 
 	var wh webHookPush
 	if !c.Bind(&wh) {
 		log.Error("could not parse json request")
-		c.String(400, "could not parse json request")
+		c.String(http.StatusBadRequest, "could not parse json request")
 		return
 	}
 	cdir := filepath.Join(w.config.Workdir, filepath.Base(wh.Repository.CloneUrl))
@@ -307,34 +320,34 @@ func (w *webHookResource) copyRemote(c *gin.Context) {
 		if os.IsNotExist(err) { // clone repository
 			if err := g.Clone(); err != nil {
 				log.Error(err)
-				c.String(400, err.Error())
+				c.String(http.StatusBadRequest, err.Error())
 				return
 			}
 			log.Infof("cloned repository %s\n", wh.Repository.CloneUrl)
 
 		} else {
 			log.Error(err)
-			c.String(400, err.Error())
+			c.String(http.StatusBadRequest, err.Error())
 			return
 		}
 	} else if info.IsDir() { // repository already cloned
 		// pull latest changes
 		if err := g.Pull(); err != nil {
 			log.Error(err)
-			c.String(400, err.Error())
+			c.String(http.StatusBadRequest, err.Error())
 			return
 		}
 		log.Infof("pulled repository %s\n", wh.Repository.CloneUrl)
 
 	} else {
 		log.Error("Unknown error, cannot pull or clone repository")
-		c.String(400, "Unknown error, cannot pull or clone repository")
+		c.String(http.StatusBadRequest, "Unknown error, cannot pull or clone repository")
 		return
 	}
 	// now checkout particular commit
 	if err := g.Checkout(wh.HeadCommit.Id); err != nil {
 		log.Error(err)
-		c.String(400, err.Error())
+		c.String(http.StatusBadRequest, err.Error())
 		return
 	}
 	log.Infof("checked out commit %s of repository %s\n", wh.HeadCommit.Id, wh.Repository.CloneUrl)
@@ -343,7 +356,7 @@ func (w *webHookResource) copyRemote(c *gin.Context) {
 	// copy them to remote server
 	for _, a := range wh.HeadCommit.Added {
 		if err := w.secureCopy(a, cdir); err != nil {
-			c.String(400, err.Error())
+			c.String(http.StatusBadRequest, err.Error())
 			log.Error(err)
 			return
 		}
@@ -351,7 +364,7 @@ func (w *webHookResource) copyRemote(c *gin.Context) {
 	}
 	for _, m := range wh.HeadCommit.Modified {
 		if err := w.secureCopy(m, cdir); err != nil {
-			c.String(400, err.Error())
+			c.String(http.StatusBadRequest, err.Error())
 			log.Error(err)
 			return
 		}
