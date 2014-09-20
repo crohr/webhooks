@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha1"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -177,6 +179,10 @@ func main() {
 }
 
 func runServer(c *cli.Context) {
+	// check for secret token
+	if token := os.Getenv("WEBHOOK_TOKEN"); len(token) == 0 {
+		log.Fatal("Environment WEBHOOK_TOKEN is not set")
+	}
 	config, err := readConfig(c)
 	if err != nil {
 		log.Fatalf("error in reading config\n%s\n", err)
@@ -216,6 +222,13 @@ func getHttpHandler(conf Config) (http.Handler, error) {
 	auth.POST("/email", resource.sendEmail)
 	auth.POST("/copy", resource.copyRemote)
 	return r, nil
+}
+
+func validateToken(messageMAC, body, token string) bool {
+	mac := hmac.New(sha1.New, []byte(token))
+	mac.Write([]byte(body))
+	expected := mac.Sum(nil)
+	return hmac.Equal([]byte(messageMAC), expected)
 }
 
 func getSftpClient(conf Config) []*sftp.Client {
