@@ -224,11 +224,11 @@ func getHttpHandler(conf Config) (http.Handler, error) {
 	return r, nil
 }
 
-func validateToken(messageMAC, body, token string) bool {
-	mac := hmac.New(sha1.New, []byte(token))
-	mac.Write([]byte(body))
+func validateToken(messageMAC, body, token []byte) bool {
+	mac := hmac.New(sha1.New, token)
+	mac.Write(body)
 	expected := mac.Sum(nil)
-	return hmac.Equal([]byte(messageMAC), expected)
+	return hmac.Equal(messageMAC, expected)
 }
 
 func getSftpClient(conf Config) []*sftp.Client {
@@ -269,9 +269,27 @@ type webHookResource struct {
 }
 
 func (w *webHookResource) copyRemote(c *gin.Context) {
-	//for _, c := range w.clients {
-	//defer c.Close()
-	//}
+	// Validating the hash signature send with the webhook
+	// It should match with the given secret token
+	messageMAC := c.Request.Header.Get("X-Hub-Signature")
+	if len(messageMAC) == 0 {
+		log.Error("no digest given in the webhook")
+		c.String(400, "no digest given in the webhook")
+		return
+	}
+	body, err := ioutil.ReadAll(c.Request.Body)
+	if err != nil {
+		log.Error("unable to read the HTTP body")
+		c.String(400, "unable to read the HTTP body")
+		return
+	}
+	if !validateToken([]byte(messageMAC), body, []byte(os.Getenv("WEBHOOK_TOKEN"))) {
+		log.Error("unable to validate the hash signature")
+		c.String(400, "unable to validate the hash signature")
+		return
+	}
+	// Validation ends
+
 	var wh webHookPush
 	if !c.Bind(&wh) {
 		log.Error("could not parse json request")
