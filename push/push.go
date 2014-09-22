@@ -268,7 +268,6 @@ func getSftpClient(conf Config) []*sftp.Client {
 
 func SecureWebhook() gin.HandlerFunc {
 	return func(c *gin.Context) {
-
 		// Validating the hash signature send with the webhook
 		// It should match with the given secret token
 		messageMAC := c.Request.Header.Get("X-Hub-Signature")
@@ -283,11 +282,16 @@ func SecureWebhook() gin.HandlerFunc {
 			c.Fail(http.StatusBadRequest, err)
 			return
 		}
+		//make a copy of request body for subsequent use
+		rd := ioutil.NopCloser(bytes.NewBuffer(body))
 		if !validateToken([]byte(messageMAC), body, []byte(os.Getenv("WEBHOOK_TOKEN"))) {
 			log.Error("unable to validate the hash signature")
 			c.Fail(http.StatusBadRequest, errors.New("unable to validate the hash signature"))
 			return
 		}
+		// assign the copy to the request body since the original will get drained by
+		// the previous process
+		c.Request.Body = rd
 		// Validation ends
 		c.Next()
 	}
@@ -299,15 +303,16 @@ type webHookResource struct {
 }
 
 func (w *webHookResource) Bind(c *gin.Context, s *webHookPush) bool {
-	body, err := ioutil.ReadAll(c.Request.Body)
+	//body, err := ioutil.ReadAll(c.Request.Body)
+	//if err != nil {
+	//log.Errorf("Unable to read body of requrest error:%s\n", err)
+	//c.Fail(http.StatusBadRequest, err)
+	//return false
+	//}
+	d := json.NewDecoder(c.Request.Body)
+	err := d.Decode(s)
 	if err != nil {
-		log.Error(err)
-		c.Fail(http.StatusBadRequest, err)
-		return false
-	}
-	err = json.Unmarshal(body, s)
-	if err != nil {
-		log.Error(err)
+		log.Errorf("Unable to decode json error:%s\n", err)
 		c.Fail(http.StatusBadRequest, err)
 		return false
 	}
