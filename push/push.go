@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -230,11 +231,7 @@ func validateToken(messageMAC, body, token []byte) bool {
 	mac := hmac.New(sha1.New, token)
 	mac.Write(body)
 	expected := "sha1=" + hex.EncodeToString(mac.Sum(nil))
-	if !hmac.Equal(messageMAC, []byte(expected)) {
-		log.Errorf("got:%s\texpected:%s\n", string(messageMAC), expected)
-		return false
-	}
-	return true
+	return hmac.Equal(messageMAC, []byte(expected))
 }
 
 func getSftpClient(conf Config) []*sftp.Client {
@@ -301,12 +298,27 @@ type webHookResource struct {
 	clients []*sftp.Client
 }
 
+func (w *webHookResource) Bind(c *gin.Context, s *webHookPush) bool {
+	body, err := ioutil.ReadAll(c.Request.Body)
+	if err != nil {
+		log.Error(err)
+		c.Fail(http.StatusBadRequest, err)
+		return false
+	}
+	err = json.Unmarshal(body, s)
+	if err != nil {
+		log.Error(err)
+		c.Fail(http.StatusBadRequest, err)
+		return false
+	}
+	return true
+}
+
 func (w *webHookResource) copyRemote(c *gin.Context) {
 
 	var wh webHookPush
-	if !c.Bind(&wh) {
+	if !w.Bind(c, &wh) {
 		log.Error("could not parse json request")
-		c.String(http.StatusBadRequest, "could not parse json request")
 		return
 	}
 	cdir := filepath.Join(w.config.Workdir, filepath.Base(wh.Repository.CloneUrl))
@@ -320,7 +332,7 @@ func (w *webHookResource) copyRemote(c *gin.Context) {
 		if os.IsNotExist(err) { // clone repository
 			if err := g.Clone(); err != nil {
 				log.Error(err)
-				c.String(http.StatusBadRequest, err.Error())
+				c.Fail(http.StatusBadRequest, err)
 				return
 			}
 			log.Infof("cloned repository %s\n", wh.Repository.CloneUrl)
