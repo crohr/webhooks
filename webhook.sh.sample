@@ -1,0 +1,2 @@
+# Should be set and match the github webhook secret
+export WEBHOOK_TOKEN=
