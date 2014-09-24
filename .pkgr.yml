@@ -1,2 +1,5 @@
 targets:
   centos-6:
+build_dependencies:
+  - bzr
+  - mercurial
